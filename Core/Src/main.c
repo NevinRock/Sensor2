@@ -23,6 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdbool.h>
+#include <math.h>   // 后面 sqrtf 也要用
 
 /* USER CODE END Includes */
 
@@ -91,11 +93,14 @@ int main(void)
   MX_TOF_Init();
   /* USER CODE BEGIN 2 */
 
-  uint8_t  in_sector   = 0;      // 当前是否在 a<1000 区域
-  uint32_t enter_time  = 0;      // 进入 a<1000 的时间(ms)
+  int count = 0;
+  double d0_total = 0;
+  double d0 = 0;
+  bool begin_flag = 0; // 0 = calibration, 1 = start
 
-  uint8_t  has_prev_rpm = 0;     // 是否已经有上一轮的 rpm
-  float    prev_rpm     = 0.0f;  // 上一次计算得到的 rpm
+  // wind_speed para
+   double K = 0.72;
+   double wind_speed = 0;
 
   /* USER CODE END 2 */
 
@@ -103,55 +108,42 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  float dis = Return_avg();
 
-	  float a = Return_avg();
-	  uint32_t now = HAL_GetTick();   // 当前时间(ms)
+	  //======================================
+	  // 1) 前 100 次读数用于标定 d0
+	  //======================================
+	  if (!begin_flag)  // begin_flag == 0 → 标定阶段
+	  {
+		  count++;
+		  d0_total += dis;
 
-	  if (a < 1000.0f) {
-		  // 刚刚进入遮挡区：记录起始时间
-		  if (!in_sector) {
-			  in_sector  = 1;
-			  enter_time = now;
+
+
+		  if (count >= 100)
+		  {
+			  d0 = d0_total / 100.0;
+			  begin_flag = 1;   // 标定结束
+
 		  }
-	  } else {
-		  // 刚刚离开遮挡区：这次遮挡结束，可以计算一次 T_cover
-		  if (in_sector) {
-			  in_sector = 0;
-			  uint32_t T_cover_ms = now - enter_time;
 
-			  // 过滤掉特别短的噪声脉冲，例如 <10ms
-			  if (T_cover_ms > 10) {
+		  HAL_Delay(10);
+		  continue;   // 不进入下面的风速计算部分
+	  }
 
-				  // 算角速度 / 转速
-				  float T_cover_s = T_cover_ms / 1000.0f;
-				  float omega     = (2.0f * 3.1415926f / 3.0f) / T_cover_s; // rad/s
-				  float rpm_curr  = 20000.0f / (float)T_cover_ms;           // 当前这一次的 rpm
+	  //======================================
+	  // 2) 已经标定好 → 正式运行
+	  //======================================
+	  float dx = d0 - dis;       // 距离差
+	  if (dx < 0) dx = 0;        // 避免负数（有风时 dis 变小）
 
-				  if (has_prev_rpm) {
-					  // 有上一轮数据：取两次 rpm 中较小的那个输出
-					  float rpm_min = (rpm_curr < prev_rpm) ? rpm_curr : prev_rpm;
 
-					  printf("T_cover = %lu ms, omega = %.2f rad/s, "
-							 "rpm_curr = %.1f, rpm_prev = %.1f, rpm_min = %.1f\r\n",
-							 (unsigned long)T_cover_ms,
-							 omega,
-							 rpm_curr,
-							 prev_rpm,
-							 rpm_min);
+	  wind_speed =  sqrtf(dx / K);
 
-					  // 更新 prev_rpm 为当前这次，下一次继续和它比较
-					  prev_rpm = rpm_curr;
-				  } else {
-					  // 第一次还没有 prev_rpm，就先存住，不输出 min
-					  prev_rpm    = rpm_curr;
-					  has_prev_rpm = 1;
 
-					  printf("T_cover = %lu ms, omega = %.2f rad/s, rpm_curr = %.1f (no prev yet)\r\n",
-							 (unsigned long)T_cover_ms, omega, rpm_curr);
-				  }
-			  }
-		  }
-	      }
+
+	  printf("%f\n", wind_speed);
+
 
 	  HAL_Delay(5);
 
